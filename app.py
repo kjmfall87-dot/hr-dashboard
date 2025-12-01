@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import altair as alt  # 그래프 개선용
 
 # ------------------------------------------------
 # 기본 설정
@@ -31,7 +32,7 @@ def load_sheet(sheet_name: str):
 
 # 1번~4번 시트 로드
 flow_df   = load_sheet("인원변동")   # 1) 인원 변동
-turn_df   = load_sheet("퇴사율")     # 2) 퇴사율
+turn_df   = load_sheet("퇴사율")     # 2) 퇴사자 수
 cohort_df = load_sheet("잔존율")     # 3) 잔존율
 tenure_df = load_sheet("근속")       # 4) 근속
 
@@ -39,11 +40,11 @@ tenure_df = load_sheet("근속")       # 4) 근속
 # ------------------------------------------------
 # 화면 상단 설명
 # ------------------------------------------------
-st.title("HR 분석 대시보드 - 그룹 : 조직 현황 및 인력 변동")
+st.title("HR 분석 대시보드 - 그룹 1: 조직 현황 및 인력 변동")
 
 st.write(
     """
-이 화면은 하나의 페이지에서 **인원 변동 / 퇴사율 / 잔존율 / 근속**을  
+이 화면은 하나의 페이지에서 **인원 변동 / 퇴사 현황 / 잔존율 / 근속**을  
 순서대로 내려가며 볼 수 있도록 구성했습니다.  
 표는 최소화하고, **그래프와 핵심 숫자 중심**으로 정리했습니다.
 """
@@ -99,12 +100,12 @@ if flow_df is not None:
             st.metric("마지막 월 입사 / 퇴사", hire_term_display)
 
         # 그래프: 월별 입사자 / 퇴사자
-        st.subheader("월별 입사자 / 퇴사자")
+        st.subheader("월별 입사자 / 퇴사자 (명)")
         chart_flow = df.set_index("월")[["입사자", "퇴사자"]]
         st.bar_chart(chart_flow)
 
         # 그래프: 월별 총원
-        st.subheader("월별 총원 추이")
+        st.subheader("월별 총원 추이 (명)")
         chart_headcount = df.set_index("월")[["총원"]]
         st.line_chart(chart_headcount)
 
@@ -115,58 +116,74 @@ if flow_df is not None:
 st.markdown("---")
 
 # =================================================
-# 2) 퇴사율 (연도 / 전체 / 아트 / 기획 / 개발지원 / 사업 / 프로그램 / staff)
+# 2) 퇴사 현황 (연도 / 아트 / 기획 / 개발지원 / 사업 / 프로그램 / staff)
 #    시트: 퇴사율
+#    ❗ 여기 숫자는 '퇴사율'이 아니라 '퇴사자 수'
 # =================================================
-st.header("2) 연간 퇴사율 (전체 vs 부서 비교)")
+st.header("2) 연간 퇴사 현황 (퇴사자 수 기준, 부서별)")
 
 if turn_df is not None:
     df = turn_df.copy()
 
-    expected_cols = ["연도", "전체", "아트", "기획", "개발지원", "사업", "프로그램", "staff"]
+    dept_cols = ["아트", "기획", "개발지원", "사업", "프로그램", "staff"]
+    expected_cols = ["연도"] + dept_cols
     missing = [c for c in expected_cols if c not in df.columns]
     if missing:
         st.error(f"'퇴사율' 시트에 다음 컬럼이 없습니다: {missing}")
     else:
-        # 숫자 컬럼 변환
-        for col in expected_cols:
-            if col != "연도":
-                df[col] = pd.to_numeric(df[col], errors="coerce")
+        # 숫자 컬럼 변환 (NaN 허용)
+        for col in dept_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
         df = df.sort_values("연도")
 
         latest = df.iloc[-1]
         latest_year = latest["연도"]
-        latest_total = latest["전체"]
 
         col1, col2 = st.columns(2)
         with col1:
             st.metric("마지막 연도", str(latest_year))
         with col2:
-            if pd.isna(latest_total):
-                st.metric("마지막 연도 전체 퇴사율(%)", "데이터 없음")
+            # 예시로 '아트' 부서 퇴사자 수 표시 (필요 시 다른 부서로 바꿔도 됨)
+            sample_dept = "아트"
+            sample_val = latest[sample_dept]
+            if pd.isna(sample_val):
+                st.metric(f"마지막 연도 {sample_dept} 퇴사자 수", "데이터 없음")
             else:
-                st.metric("마지막 연도 전체 퇴사율(%)", f"{latest_total}")
+                st.metric(f"마지막 연도 {sample_dept} 퇴사자 수", f"{int(sample_val)}명")
 
         # 비교 대상 부서 선택
-        dept_cols = ["아트", "기획", "개발지원", "사업", "프로그램", "staff"]
-        선택_부서 = st.selectbox("비교할 부서를 선택하세요", dept_cols)
+        선택_부서 = st.selectbox("그래프로 보고 싶은 부서를 선택하세요", dept_cols)
 
-        chart_df = df.set_index("연도")[["전체", 선택_부서]]
+        # Altair용 데이터 변환
+        plot_df = df[["연도", 선택_부서]].rename(columns={선택_부서: "퇴사자수"})
 
-        st.subheader(f"전체 vs {선택_부서} 연간 퇴사율 추이")
-        st.line_chart(chart_df)
+        st.subheader(f"{선택_부서} 연간 퇴사자 수 추이")
 
-        with st.expander("퇴사율 원본 데이터 보기"):
-            st.dataframe(df)
+        line_chart = (
+            alt.Chart(plot_df)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("연도:O", axis=alt.Axis(title="연도", labelAngle=-45)),
+                y=alt.Y("퇴사자수:Q", axis=alt.Axis(title="퇴사자 수(명)")),
+                tooltip=["연도", "퇴사자수"]
+            )
+            .properties(height=350)
+        )
+
+        st.altair_chart(line_chart, use_container_width=True)
+
+        with st.expander("퇴사자 수 원본 데이터 보기"):
+            st.dataframe(df[["연도"] + dept_cols])
 
 st.markdown("---")
 
 # =================================================
 # 3) 잔존율 (입사연도 / 경과개월 / 잔존율)
 #    시트: 잔존율
+#    ❗ 여러 코호트를 한 그래프에 색깔로 구분해서 비교
 # =================================================
-st.header("3) 입사 연도별 잔존율 (코호트 분석)")
+st.header("3) 입사 연도별 잔존율 (코호트 비교)")
 
 if cohort_df is not None:
     df = cohort_df.copy()
@@ -189,16 +206,31 @@ if cohort_df is not None:
             st.warning("잔존율 데이터에 유효한 입사연도가 없습니다.")
         else:
             선택_연도 = st.multiselect(
-                "보고 싶은 입사연도를 선택하세요",
+                "비교하고 싶은 입사연도를 선택하세요",
                 years,
                 default=years
             )
 
-            for y in 선택_연도:
-                sub = df[df["입사연도"] == y].set_index("경과개월")[["잔존율"]]
-                st.subheader(f"{int(y)}년 입사 코호트 잔존율")
-                st.line_chart(sub)
-                st.caption(f"- {int(y)}년 입사자 기준, 경과 개월별 잔존율(%)")
+            # 선택한 코호트만 필터링
+            plot_df = df[df["입사연도"].isin(선택_연도)].copy()
+            plot_df["입사연도"] = plot_df["입사연도"].astype(int)
+
+            st.subheader("선택한 코호트 잔존율 비교")
+
+            # Altair 라인 그래프: 코호트별 색상 구분
+            cohort_chart = (
+                alt.Chart(plot_df)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("경과개월:Q", axis=alt.Axis(title="경과 개월")),
+                    y=alt.Y("잔존율:Q", axis=alt.Axis(title="잔존율(%)")),
+                    color=alt.Color("입사연도:N", title="입사연도"),
+                    tooltip=["입사연도", "경과개월", "잔존율"]
+                )
+                .properties(height=400)
+            )
+
+            st.altair_chart(cohort_chart, use_container_width=True)
 
             with st.expander("잔존율 원본 데이터 보기"):
                 st.dataframe(df)
@@ -253,4 +285,5 @@ if tenure_df is not None:
         with st.expander("근속 원본 데이터 보기"):
             st.dataframe(df)
 
-st.success("엑셀 시트 구조에 맞춘 단일 페이지 HR 대시보드 구성이 완료되었습니다.")
+st.success("엑셀 시트 구조에 맞춘 HR 대시보드가 업데이트되었습니다.")
+
